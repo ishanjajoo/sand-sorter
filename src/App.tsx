@@ -5,7 +5,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, RotateCcw, Trophy, AlertTriangle, Info } from 'lucide-react';
+import { Play, RotateCcw, Trophy, AlertTriangle, Info, Home } from 'lucide-react';
 
 // --- Constants ---
 const COLORS = {
@@ -19,6 +19,8 @@ const COLORS = {
   GREEN_DARK: '#1E5631',
   GREEN_LIGHT: '#A9DFBF',
   YELLOW: '#FFCC00',
+  YELLOW_DARK: '#B8860B',
+  YELLOW_LIGHT: '#FFFACD',
   BG: '#0A0E14',
   GRID: 'rgba(255, 255, 255, 0.03)',
   METAL: '#4A4A4A',
@@ -36,11 +38,26 @@ const FRICTION = 0.985;
 const TUBE_WIDTH = 80;
 const SORTER_LENGTH = 180;
 
+type ColorType = 'RED' | 'BLUE' | 'GREEN' | 'YELLOW';
+
+const LEVEL_CONFIGS: Record<number, { maxSand: number, colors: ColorType[], sorters: number, tubes: number, spawnInterval: number }> = {
+  1: { maxSand: 400, colors: ['RED', 'BLUE'], sorters: 1, tubes: 2, spawnInterval: 100 },
+  2: { maxSand: 500, colors: ['RED', 'GREEN'], sorters: 1, tubes: 2, spawnInterval: 95 },
+  3: { maxSand: 600, colors: ['RED', 'BLUE', 'GREEN'], sorters: 3, tubes: 3, spawnInterval: 90 },
+  4: { maxSand: 800, colors: ['BLUE', 'YELLOW'], sorters: 1, tubes: 2, spawnInterval: 85 },
+  5: { maxSand: 1000, colors: ['RED', 'BLUE', 'YELLOW'], sorters: 3, tubes: 3, spawnInterval: 80 },
+  6: { maxSand: 1200, colors: ['RED', 'BLUE', 'GREEN', 'YELLOW'], sorters: 6, tubes: 4, spawnInterval: 75 },
+  7: { maxSand: 1400, colors: ['RED', 'GREEN', 'YELLOW'], sorters: 3, tubes: 3, spawnInterval: 70 },
+  8: { maxSand: 1600, colors: ['BLUE', 'GREEN', 'YELLOW'], sorters: 3, tubes: 3, spawnInterval: 65 },
+  9: { maxSand: 1800, colors: ['RED', 'BLUE', 'GREEN', 'YELLOW'], sorters: 6, tubes: 4, spawnInterval: 60 },
+  10: { maxSand: 2200, colors: ['RED', 'BLUE', 'GREEN', 'YELLOW'], sorters: 6, tubes: 4, spawnInterval: 50 },
+};
+
 // Relative positions (percentage of screen height)
-const FUNNEL_Y_RATIO = 0.18;
-const SORTER_Y_RATIO = 0.42;
-const TUBE_Y_RATIO = 0.72;
-const TUBE_HEIGHT_RATIO = 0.22;
+const FUNNEL_Y_RATIO = 0.22;
+const SORTER_Y_RATIO = 0.55;
+const TUBE_Y_RATIO = 0.82;
+const TUBE_HEIGHT_RATIO = 0.15;
 
 // --- Types ---
 interface Particle {
@@ -49,9 +66,11 @@ interface Particle {
   vx: number;
   vy: number;
   color: string;
-  type: 'RED' | 'BLUE' | 'GREEN';
+  type: ColorType;
   active: boolean;
-  hasHitSorter?: boolean;
+  onSorterId?: number;
+  lastSorterId?: number;
+  sorterCooldown?: number;
 }
 
 export default function App() {
@@ -62,7 +81,7 @@ export default function App() {
   const [level, setLevel] = useState(1);
   const [isPaused, setIsPaused] = useState(false);
   const [spillage, setSpillage] = useState(0);
-  const [sorterAngles, setSorterAngles] = useState([25, 25]); // Array for multiple sorters
+  const [sorterAngles, setSorterAngles] = useState([25, 25, 25]); // Array for multiple sorters
   const [sandRemaining, setSandRemaining] = useState(500);
   const [score, setScore] = useState(0);
   const isGameOverTriggered = useRef(false);
@@ -77,15 +96,11 @@ export default function App() {
     maxSand: 800,
     spilledCount: 0,
     layerSize: 40, // Number of particles per color layer
-    upcomingColors: [] as ('RED' | 'BLUE' | 'GREEN')[],
-    initialCounts: { RED: 0, BLUE: 0, GREEN: 0 },
+    upcomingColors: [] as ColorType[],
+    initialCounts: { RED: 0, BLUE: 0, GREEN: 0, YELLOW: 0 },
     gameTime: 0,
     beads: [] as { ry: number; rx: number; offset: number }[],
-    tubes: [
-      { red: 0, blue: 0, green: 0 },
-      { red: 0, blue: 0, green: 0 },
-      { red: 0, blue: 0, green: 0 },
-    ],
+    tubes: [] as { red: number; blue: number; green: number; yellow: number }[],
     splashes: [] as { x: number, y: number, color: string, life: number }[],
     dust: [] as { x: number, y: number, vx: number, vy: number, size: number, opacity: number }[],
   });
@@ -101,11 +116,11 @@ export default function App() {
     gameData.current.totalSpawned = 0;
     gameData.current.spilledCount = 0;
     gameData.current.spawnTimer = 0;
-    gameData.current.tubes = [
-      { red: 0, blue: 0, green: 0 },
-      { red: 0, blue: 0, green: 0 },
-      { red: 0, blue: 0, green: 0 },
-    ];
+    
+    const config = LEVEL_CONFIGS[targetLevel] || LEVEL_CONFIGS[1];
+    setSorterAngles(Array(config.sorters).fill(25));
+    gameData.current.tubes = Array(config.tubes).fill(null).map(() => ({ red: 0, blue: 0, green: 0, yellow: 0 }));
+    
     gameData.current.splashes = [];
     gameData.current.dust = [];
     
@@ -122,28 +137,24 @@ export default function App() {
     }
     
     // Pre-fill upcoming colors
-    const upcoming: ('RED' | 'BLUE' | 'GREEN')[] = [];
-    const maxSand = targetLevel === 1 ? 400 : 600;
+    const upcoming: ColorType[] = [];
+    const maxSand = config.maxSand;
     gameData.current.maxSand = maxSand;
     
-    if (targetLevel === 1) {
-      const half = Math.floor(maxSand / 2);
-      for (let i = 0; i < maxSand; i++) {
-        upcoming.push(i < half ? 'RED' : 'BLUE');
-      }
-    } else {
-      const third = Math.floor(maxSand / 3);
-      for (let i = 0; i < maxSand; i++) {
-        if (i < third) upcoming.push('RED');
-        else if (i < third * 2) upcoming.push('BLUE');
-        else upcoming.push('GREEN');
-      }
+    const colorCount = config.colors.length;
+    const perColor = Math.floor(maxSand / colorCount);
+    
+    for (let i = 0; i < maxSand; i++) {
+      const colorIdx = Math.min(colorCount - 1, Math.floor(i / perColor));
+      upcoming.push(config.colors[colorIdx]);
     }
+    
     gameData.current.upcomingColors = upcoming;
     gameData.current.initialCounts = {
       RED: upcoming.filter(c => c === 'RED').length,
       BLUE: upcoming.filter(c => c === 'BLUE').length,
       GREEN: upcoming.filter(c => c === 'GREEN').length,
+      YELLOW: upcoming.filter(c => c === 'YELLOW').length,
     };
     gameData.current.gameTime = 0;
     gameData.current.beads = [];
@@ -161,7 +172,7 @@ export default function App() {
     setGameState('playing');
     setIsPaused(false);
     isGameOverTriggered.current = false;
-    setSorterAngles(targetLevel === 1 ? [25] : [25, 25]);
+    setSorterAngles(Array(config.sorters).fill(25));
   };
 
   const handleInteraction = (e: React.PointerEvent) => {
@@ -174,12 +185,24 @@ export default function App() {
     const y = e.clientY - rect.top;
 
     const sorterY = gameData.current.height * SORTER_Y_RATIO;
-    const sorterConfigs = level === 1 
-      ? [{ x: gameData.current.width / 2, y: sorterY }]
-      : [
-          { x: gameData.current.width / 2, y: sorterY - 80 }, // Top Sorter
-          { x: gameData.current.width / 2 + 81, y: sorterY + 100 } // Bottom Right Sorter
-        ];
+    const config = LEVEL_CONFIGS[level] || LEVEL_CONFIGS[1];
+    const TIP_OFFSET = (SORTER_LENGTH / 2) * Math.cos(25 * Math.PI / 180);
+    const sorterConfigs = [];
+    if (config.sorters === 1) {
+      sorterConfigs.push({ x: gameData.current.width / 2, y: sorterY });
+    } else if (config.sorters === 3) {
+      sorterConfigs.push({ x: gameData.current.width / 2, y: sorterY - 100 });
+      sorterConfigs.push({ x: gameData.current.width / 2 - TIP_OFFSET, y: sorterY + 60 });
+      sorterConfigs.push({ x: gameData.current.width / 2 + TIP_OFFSET, y: sorterY + 60 });
+    } else if (config.sorters === 6) {
+      // 4 tubes layout: 1 top, 2 middle, 3 bottom
+      sorterConfigs.push({ x: gameData.current.width / 2, y: sorterY - 150 }); // Top
+      sorterConfigs.push({ x: gameData.current.width / 2 - TIP_OFFSET, y: sorterY - 30 }); // Middle L
+      sorterConfigs.push({ x: gameData.current.width / 2 + TIP_OFFSET, y: sorterY - 30 }); // Middle R
+      sorterConfigs.push({ x: gameData.current.width / 2 - TIP_OFFSET * 2, y: sorterY + 90 }); // Bottom L
+      sorterConfigs.push({ x: gameData.current.width / 2, y: sorterY + 90 }); // Bottom M
+      sorterConfigs.push({ x: gameData.current.width / 2 + TIP_OFFSET * 2, y: sorterY + 90 }); // Bottom R
+    }
 
     let closestIdx = -1;
     let minDist = 120; // Click radius for sorter
@@ -229,15 +252,17 @@ export default function App() {
       const tubeHeight = height * TUBE_HEIGHT_RATIO;
 
       // 1. Spawn Particles from Queue
+      const config = LEVEL_CONFIGS[level] || LEVEL_CONFIGS[1];
       if (gameData.current.totalSpawned < maxSand) {
         // Slow down spawn rate to give time to sort
         gameData.current.spawnTimer += dt;
-        if (gameData.current.spawnTimer > 80) { // Spawn every 80ms
+        if (gameData.current.spawnTimer > config.spawnInterval) { 
           gameData.current.spawnTimer = 0;
           const type = upcomingColors.shift() || 'RED';
           let particleColor = COLORS.RED;
           if (type === 'BLUE') particleColor = COLORS.BLUE;
           if (type === 'GREEN') particleColor = COLORS.GREEN;
+          if (type === 'YELLOW') particleColor = COLORS.YELLOW;
           
           particles.push({
             x: width / 2,
@@ -256,54 +281,130 @@ export default function App() {
       }
 
       // 2. Update Particles
-      const sorterConfigs = level === 1 
-        ? [{ x: width / 2, y: sorterY, angle: sorterAngles[0], length: SORTER_LENGTH }]
-        : [
-            { x: width / 2, y: sorterY - 80, angle: sorterAngles[0], length: SORTER_LENGTH }, // Top Sorter
-            { x: width / 2 + 81, y: sorterY + 100, angle: sorterAngles[1], length: SORTER_LENGTH / 2 } // Bottom Right Sorter (Half size)
-          ];
+      const sorterConfigs = [];
+      const TIP_OFFSET = (SORTER_LENGTH / 2) * Math.cos(25 * Math.PI / 180);
+      
+      if (config.sorters === 1) {
+        sorterConfigs.push({ x: width / 2, y: sorterY, angle: sorterAngles[0], length: SORTER_LENGTH, id: 0 });
+      } else if (config.sorters === 3) {
+        sorterConfigs.push({ x: width / 2, y: sorterY - 100, angle: sorterAngles[0], length: SORTER_LENGTH, id: 0 });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET, y: sorterY + 60, angle: sorterAngles[1], length: SORTER_LENGTH, id: 1 });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET, y: sorterY + 60, angle: sorterAngles[2], length: SORTER_LENGTH, id: 2 });
+      } else if (config.sorters === 6) {
+        sorterConfigs.push({ x: width / 2, y: sorterY - 150, angle: sorterAngles[0], length: SORTER_LENGTH, id: 0 });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET, y: sorterY - 30, angle: sorterAngles[1], length: SORTER_LENGTH, id: 1 });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET, y: sorterY - 30, angle: sorterAngles[2], length: SORTER_LENGTH, id: 2 });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET * 2, y: sorterY + 90, angle: sorterAngles[3], length: SORTER_LENGTH, id: 3 });
+        sorterConfigs.push({ x: width / 2, y: sorterY + 90, angle: sorterAngles[4], length: SORTER_LENGTH, id: 4 });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET * 2, y: sorterY + 90, angle: sorterAngles[5], length: SORTER_LENGTH, id: 5 });
+      }
 
-      // Bottom Guides (ensure sand falls in tubes)
-      const tubePositions = level === 1
-        ? [width / 2 - 81, width / 2 + 81]
-        : [width / 2 - 81, width / 2 + 40, width / 2 + 122];
+      let tubePositions = [];
+      if (config.tubes === 2) {
+        tubePositions = [width / 2 - TIP_OFFSET, width / 2 + TIP_OFFSET];
+      } else if (config.tubes === 3) {
+        tubePositions = [width / 2 - TIP_OFFSET * 2, width / 2, width / 2 + TIP_OFFSET * 2];
+      } else if (config.tubes === 4) {
+        tubePositions = [width / 2 - TIP_OFFSET * 3, width / 2 - TIP_OFFSET, width / 2 + TIP_OFFSET, width / 2 + TIP_OFFSET * 3];
+      }
       
       for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        p.vx = 0; // Reset horizontal velocity each frame for straight fall
-        p.vy += GRAVITY;
         
-        // Collision with Sorters
-        let onSorter = false;
-        sorterConfigs.forEach(config => {
-          const sLen = config.length || SORTER_LENGTH;
-          const rad = (config.angle * Math.PI) / 180;
-          const sX1 = config.x - Math.cos(rad) * (sLen / 2);
-          const sY1 = config.y - Math.sin(rad) * (sLen / 2);
-          const sX2 = config.x + Math.cos(rad) * (sLen / 2);
-          const sY2 = config.y + Math.sin(rad) * (sLen / 2);
-
-          if (p.y > config.y - 60 && p.y < config.y + 60) {
-            const dx = sX2 - sX1;
-            const dy = sY2 - sY1;
-            const lenSq = dx * dx + dy * dy;
-            const t = Math.max(0, Math.min(1, ((p.x - sX1) * dx + (p.y - sY1) * dy) / lenSq));
-            const projX = sX1 + t * dx;
-            const projY = sY1 + t * dy;
-            const dist = Math.sqrt((p.x - projX) ** 2 + (p.y - projY) ** 2);
-
-            if (dist < (PARTICLE_SIZE / 2) + 2) {
-              p.y = projY - 2;
-              const slideForce = Math.cos(rad) * 1.5 * (config.angle > 0 ? 1 : -1);
-              p.vx = slideForce;
-              p.vy = Math.abs(Math.sin(rad)) * 3; 
-              onSorter = true;
+        if (p.onSorterId !== undefined) {
+          const sConf = sorterConfigs.find(s => s.id === p.onSorterId);
+          if (!sConf) {
+            p.onSorterId = undefined;
+          } else {
+            const sLen = sConf.length || SORTER_LENGTH;
+            const rad = (sConf.angle * Math.PI) / 180;
+            const cos = Math.cos(rad);
+            const sin = Math.sin(rad);
+            
+            // Current relative position along sorter
+            const dx = p.x - sConf.x;
+            const dy = p.y - sConf.y;
+            const distAlong = dx * cos + dy * sin;
+            
+            // Slide along
+            const slideSpeed = 4.5;
+            const nextDistAlong = distAlong + (sConf.angle > 0 ? slideSpeed : -slideSpeed);
+            
+            if (Math.abs(nextDistAlong) > sLen / 2) {
+              // Fell off the end
+              p.onSorterId = undefined;
+              // Snap to tip for straight fall
+              const tipX = sConf.x + (nextDistAlong > 0 ? sLen / 2 : -sLen / 2) * cos + sin * 9;
+              const tipY = sConf.y + (nextDistAlong > 0 ? sLen / 2 : -sLen / 2) * sin - cos * 9;
+              p.x = tipX;
+              p.y = tipY + 10; // Move well below the tip to avoid immediate re-collision
+              p.vx = 0;
+              p.vy = 2; // Initial downward nudge
+              p.lastSorterId = sConf.id;
+              p.sorterCooldown = 5; // 5 frames of no collision with this sorter
+            } else {
+              // Stay on sorter
+              p.x = sConf.x + nextDistAlong * cos + sin * 9;
+              p.y = sConf.y + nextDistAlong * sin - cos * 9; // Slide on top surface (sHeight=18)
+              p.vx = 0;
+              p.vy = 0;
+              continue; // Skip normal gravity/movement
             }
           }
-        });
+        }
 
-        p.x += p.vx;
-        p.y += p.vy;
+        p.vx *= 0.95; 
+        p.vy += GRAVITY;
+        if (p.sorterCooldown && p.sorterCooldown > 0) p.sorterCooldown--;
+        
+        const prevX = p.x;
+        const prevY = p.y;
+        const nextX = p.x + p.vx;
+        const nextY = p.y + p.vy;
+
+        // Collision with Sorters
+        for (const sConf of sorterConfigs) {
+          const sLen = sConf.length || SORTER_LENGTH;
+          const rad = (sConf.angle * Math.PI) / 180;
+          const cos = Math.cos(rad);
+          const sin = Math.sin(rad);
+          
+          // Offset to top surface (sHeight=18)
+          const sX1 = sConf.x - cos * (sLen / 2) + sin * 9;
+          const sY1 = sConf.y - sin * (sLen / 2) - cos * 9;
+          const sX2 = sConf.x + cos * (sLen / 2) + sin * 9;
+          const sY2 = sConf.y + sin * (sLen / 2) - cos * 9;
+
+          const intersect = (x1: number, y1: number, x2: number, y2: number, x3: number, y3: number, x4: number, y4: number) => {
+            const det = (x2 - x1) * (y4 - y3) - (y2 - y1) * (x4 - x3);
+            if (det === 0) return null;
+            const t = ((x3 - x1) * (y4 - y3) - (y3 - y1) * (x4 - x3)) / det;
+            const u = ((x3 - x1) * (y2 - y1) - (y3 - y1) * (x2 - x1)) / det;
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+              return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
+            }
+            return null;
+          };
+
+          const hit = intersect(prevX, prevY, nextX, nextY + 2, sX1, sY1, sX2, sY2);
+          if (hit) {
+            // Check cooldown
+            if (p.lastSorterId === sConf.id && p.sorterCooldown && p.sorterCooldown > 0) {
+              continue;
+            }
+            p.onSorterId = sConf.id;
+            p.x = hit.x;
+            p.y = hit.y - 2;
+            p.vx = 0;
+            p.vy = 0;
+            break;
+          }
+        }
+
+        if (p.onSorterId === undefined) {
+          p.x += p.vx;
+          p.y += p.vy;
+        }
 
         // Collision with Tubes and Accumulation
         const checkTube = (tubeX: number, tubeIndex: number) => {
@@ -319,7 +420,9 @@ export default function App() {
             p.vx *= 0.5; // Dampen horizontal velocity inside tube
 
             const tubeData = gameData.current.tubes[tubeIndex];
-            const total = tubeData.red + tubeData.blue + tubeData.green;
+            if (!tubeData) return false;
+            
+            const total = tubeData.red + tubeData.blue + tubeData.green + tubeData.yellow;
             const fillHeight = Math.min(tubeHeight - 10, total * 0.5);
             const surfaceY = tubeY + tubeHeight - 5 - fillHeight;
 
@@ -327,10 +430,11 @@ export default function App() {
             if (p.y >= surfaceY) {
               if (p.type === 'RED') tubeData.red++;
               else if (p.type === 'BLUE') tubeData.blue++;
-              else tubeData.green++;
+              else if (p.type === 'GREEN') tubeData.green++;
+              else if (p.type === 'YELLOW') tubeData.yellow++;
               
-              const correctTypes: ('RED' | 'BLUE' | 'GREEN')[] = level === 1 ? ['RED', 'BLUE'] : ['RED', 'BLUE', 'GREEN'];
-              const isCorrect = p.type === correctTypes[tubeIndex];
+              const correctColor = config.colors[tubeIndex];
+              const isCorrect = p.type === correctColor;
               
               if (isCorrect) {
                 setScore(s => s + 10);
@@ -412,6 +516,7 @@ export default function App() {
       const sorterY = height * SORTER_Y_RATIO;
       const tubeY = height * TUBE_Y_RATIO;
       const tubeHeight = height * TUBE_HEIGHT_RATIO;
+      const config = LEVEL_CONFIGS[level] || LEVEL_CONFIGS[1];
 
       // --- Draw Laboratory Background ---
       ctx.fillStyle = COLORS.BG;
@@ -442,17 +547,12 @@ export default function App() {
       const drawSourceTank = () => {
         const tx = width / 2;
         const ty = funnelY - 160;
-        const chamberCount = level === 1 ? 2 : 3;
+        const chamberCount = config.colors.length;
         const chamberWidth = 65;
         const chamberHeight = 100;
         const spacing = 85;
         const totalWidth = (chamberCount - 1) * spacing + chamberWidth + 40;
         
-        const colors = [COLORS.RED, COLORS.BLUE, COLORS.GREEN];
-        const colorDarks = [COLORS.RED_DARK, COLORS.BLUE_DARK, COLORS.GREEN_DARK];
-        const colorLights = [COLORS.RED_LIGHT, COLORS.BLUE_LIGHT, COLORS.GREEN_LIGHT];
-        const labels = ['RED', 'BLUE', 'GREEN'];
-
         // 1. Brushed Metal Frame (Back & Structure)
         ctx.save();
         const frameGrad = ctx.createLinearGradient(tx - totalWidth/2, 0, tx + totalWidth/2, 0);
@@ -491,7 +591,7 @@ export default function App() {
         for (let i = 0; i < chamberCount; i++) {
           const cx = tx - ((chamberCount - 1) * spacing) / 2 + i * spacing;
           const cy = ty;
-          const colorType = labels[i] as 'RED' | 'BLUE' | 'GREEN';
+          const colorType = config.colors[i];
           
           // Metallic Top Cap
           ctx.save();
@@ -535,9 +635,12 @@ export default function App() {
             ctx.clip();
             
             const sandGrad = ctx.createLinearGradient(cx - chamberWidth/2, 0, cx + chamberWidth/2, 0);
-            sandGrad.addColorStop(0, colorDarks[i]);
-            sandGrad.addColorStop(0.5, colorLights[i]);
-            sandGrad.addColorStop(1, colorDarks[i]);
+            const colorDark = COLORS[`${colorType}_DARK` as keyof typeof COLORS];
+            const colorLight = COLORS[`${colorType}_LIGHT` as keyof typeof COLORS];
+
+            sandGrad.addColorStop(0, colorDark);
+            sandGrad.addColorStop(0.5, colorLight);
+            sandGrad.addColorStop(1, colorDark);
             
             ctx.fillStyle = sandGrad;
             ctx.beginPath();
@@ -545,7 +648,7 @@ export default function App() {
             ctx.fill();
             
             // Mounded Top
-            ctx.fillStyle = colorLights[i];
+            ctx.fillStyle = colorLight;
             ctx.beginPath();
             ctx.ellipse(cx, cy + chamberHeight - fillHeight, chamberWidth/2 - 2, 6, 0, 0, Math.PI * 2);
             ctx.fill();
@@ -573,8 +676,9 @@ export default function App() {
           ctx.save();
           const ringY = cy + chamberHeight + 5;
           ctx.shadowBlur = 15;
-          ctx.shadowColor = colors[i];
-          ctx.fillStyle = colors[i];
+          const color = COLORS[colorType as keyof typeof COLORS];
+          ctx.shadowColor = color;
+          ctx.fillStyle = color;
           ctx.globalAlpha = 0.8;
           ctx.beginPath();
           ctx.ellipse(cx, ringY, chamberWidth/2 - 2, 4, 0, 0, Math.PI * 2);
@@ -718,118 +822,165 @@ export default function App() {
       };
       drawSourceTank();
 
-      // --- Draw Sorters (Mechanical 3D Asset Style) ---
-      const sorterConfigs = level === 1 
-        ? [{ x: width / 2, y: sorterY, angle: sorterAngles[0], length: SORTER_LENGTH }]
-        : [
-            { x: width / 2, y: sorterY - 80, angle: sorterAngles[0], length: SORTER_LENGTH }, // Top Sorter
-            { x: width / 2 + 81, y: sorterY + 100, angle: sorterAngles[1], length: SORTER_LENGTH / 2 } // Bottom Right Sorter (Half size)
-          ];
+      // --- Draw Sorters (Redesigned based on reference image) ---
+      const TIP_OFFSET = (SORTER_LENGTH / 2) * Math.cos(25 * Math.PI / 180);
+      let tubePositions = [];
+      if (config.tubes === 2) {
+        tubePositions = [width / 2 - TIP_OFFSET, width / 2 + TIP_OFFSET];
+      } else if (config.tubes === 3) {
+        tubePositions = [width / 2 - TIP_OFFSET * 2, width / 2, width / 2 + TIP_OFFSET * 2];
+      } else if (config.tubes === 4) {
+        tubePositions = [width / 2 - TIP_OFFSET * 3, width / 2 - TIP_OFFSET, width / 2 + TIP_OFFSET, width / 2 + TIP_OFFSET * 3];
+      }
 
-      sorterConfigs.forEach(config => {
-        const sLen = config.length || SORTER_LENGTH;
-        const rad = (config.angle * Math.PI) / 180;
+      const sorterConfigs = [];
+      if (config.sorters === 1) {
+        sorterConfigs.push({ x: width / 2, y: sorterY, angle: sorterAngles[0], length: SORTER_LENGTH });
+      } else if (config.sorters === 3) {
+        sorterConfigs.push({ x: width / 2, y: sorterY - 100, angle: sorterAngles[0], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET, y: sorterY + 60, angle: sorterAngles[1], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET, y: sorterY + 60, angle: sorterAngles[2], length: SORTER_LENGTH });
+      } else if (config.sorters === 6) {
+        sorterConfigs.push({ x: width / 2, y: sorterY - 150, angle: sorterAngles[0], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET, y: sorterY - 30, angle: sorterAngles[1], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET, y: sorterY - 30, angle: sorterAngles[2], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 - TIP_OFFSET * 2, y: sorterY + 90, angle: sorterAngles[3], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2, y: sorterY + 90, angle: sorterAngles[4], length: SORTER_LENGTH });
+        sorterConfigs.push({ x: width / 2 + TIP_OFFSET * 2, y: sorterY + 90, angle: sorterAngles[5], length: SORTER_LENGTH });
+      }
+
+      sorterConfigs.forEach((sConf, idx) => {
+        const sLen = sConf.length || SORTER_LENGTH;
+        const rad = (sConf.angle * Math.PI) / 180;
+        const sHeight = 18;
         
-        // 1. Draw the Arm
         ctx.save();
-        ctx.translate(config.x, config.y);
+        ctx.translate(sConf.x, sConf.y);
         ctx.rotate(rad);
         
-        // Brushed Green Metal Arm (Ergonomic Tapered Shape)
-        const armGrad = ctx.createLinearGradient(0, -18, 0, 18);
-        armGrad.addColorStop(0, COLORS.GREEN_DARK);
-        armGrad.addColorStop(0.2, COLORS.SORTER_GREEN);
-        armGrad.addColorStop(0.4, COLORS.GREEN_LIGHT);
-        armGrad.addColorStop(0.5, COLORS.SORTER_GREEN);
-        armGrad.addColorStop(0.8, COLORS.GREEN_DARK);
-        armGrad.addColorStop(1, '#0a1a0a');
+        // 1. Main Glass Tube Body
+        const tubeGrad = ctx.createLinearGradient(0, -sHeight/2, 0, sHeight/2);
+        tubeGrad.addColorStop(0, 'rgba(40, 10, 10, 0.9)');
+        tubeGrad.addColorStop(0.3, 'rgba(120, 20, 20, 0.8)');
+        tubeGrad.addColorStop(0.5, 'rgba(255, 50, 50, 0.7)');
+        tubeGrad.addColorStop(0.7, 'rgba(120, 20, 20, 0.8)');
+        tubeGrad.addColorStop(1, 'rgba(40, 10, 10, 0.9)');
         
-        ctx.fillStyle = armGrad;
-        ctx.shadowBlur = 20;
-        ctx.shadowColor = 'rgba(0,0,0,0.6)';
+        ctx.fillStyle = tubeGrad;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = 'rgba(255, 0, 0, 0.5)';
         
         ctx.beginPath();
-        ctx.moveTo(-sLen / 2, -8);
-        ctx.quadraticCurveTo(0, -18, sLen / 2, -8);
-        ctx.lineTo(sLen / 2, 8);
-        ctx.quadraticCurveTo(0, 18, -sLen / 2, 8);
-        ctx.closePath();
+        ctx.roundRect(-sLen/2, -sHeight/2, sLen, sHeight, 16);
         ctx.fill();
 
-        // Glowing Edges
+        // 2. Swirly Patterns (Filigree)
         ctx.save();
-        ctx.strokeStyle = COLORS.GREEN_LIGHT;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
         ctx.lineWidth = 1.5;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = COLORS.GREEN;
-        ctx.globalAlpha = 0.6;
-        ctx.stroke();
-        ctx.restore();
-
-        // Brushed Texture Overlay
-        ctx.save();
-        ctx.globalAlpha = 0.1;
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 0.5;
-        for (let i = -sLen/2 + 10; i < sLen/2 - 10; i += 4) {
+        ctx.setLineDash([]);
+        
+        const drawSwirl = (startX: number, direction: number) => {
           ctx.beginPath();
-          ctx.moveTo(i, -12);
-          ctx.lineTo(i, 12);
+          ctx.moveTo(startX, 0);
+          ctx.bezierCurveTo(
+            startX + 20 * direction, -15,
+            startX + 40 * direction, 15,
+            startX + 60 * direction, 0
+          );
           ctx.stroke();
-        }
-        ctx.restore();
-        ctx.restore(); // End Arm
+          
+          ctx.beginPath();
+          ctx.moveTo(startX + 10 * direction, -5);
+          ctx.bezierCurveTo(
+            startX + 30 * direction, -20,
+            startX + 50 * direction, 10,
+            startX + 70 * direction, -5
+          );
+          ctx.stroke();
+        };
 
-        // 2. Draw the Pivot Joint (Polished Gold)
+        drawSwirl(-sLen/2 + 10, 1);
+        drawSwirl(-sLen/2 + 30, 1);
+        drawSwirl(sLen/2 - 10, -1);
+        drawSwirl(sLen/2 - 30, -1);
+        ctx.restore();
+
+        // 3. Metallic End Caps
+        const capWidth = 12;
+        const drawCap = (x: number) => {
+          const capGrad = ctx.createLinearGradient(x - capWidth/2, 0, x + capWidth/2, 0);
+          capGrad.addColorStop(0, '#444');
+          capGrad.addColorStop(0.5, '#AAA');
+          capGrad.addColorStop(1, '#444');
+          ctx.fillStyle = capGrad;
+          ctx.beginPath();
+          ctx.roundRect(x - capWidth/2, -sHeight/2 - 2, capWidth, sHeight + 4, 4);
+          ctx.fill();
+        };
+        drawCap(-sLen/2);
+        drawCap(sLen/2);
+
+        // 4. Central Pivot Joint
         ctx.save();
-        ctx.translate(config.x, config.y);
+        ctx.rotate(-rad); // Keep pivot upright
         
-        const goldGrad = ctx.createRadialGradient(-8, -8, 0, 0, 0, 28);
-        goldGrad.addColorStop(0, COLORS.GOLD_LIGHT);
-        goldGrad.addColorStop(0.4, COLORS.GOLD);
-        goldGrad.addColorStop(0.7, COLORS.GOLD_DARK);
-        goldGrad.addColorStop(1, '#4a3200');
-        
-        ctx.fillStyle = goldGrad;
-        ctx.shadowBlur = 25;
-        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        // Outer Ring
+        const ringGrad = ctx.createRadialGradient(0, 0, 10, 0, 0, 16);
+        ringGrad.addColorStop(0, '#888');
+        ringGrad.addColorStop(0.5, '#EEE');
+        ringGrad.addColorStop(1, '#888');
+        ctx.fillStyle = ringGrad;
         ctx.beginPath();
-        ctx.arc(0, 0, 26, 0, Math.PI * 2);
+        ctx.arc(0, 0, 16, 0, Math.PI * 2);
         ctx.fill();
         
-        // Inner Polished Detail
-        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        // Inner Circle
+        ctx.fillStyle = '#333';
         ctx.beginPath();
-        ctx.arc(-6, -6, 12, 0, Math.PI * 2);
+        ctx.arc(0, 0, 10, 0, Math.PI * 2);
         ctx.fill();
         
-        // Mechanical Bolt Head
-        ctx.strokeStyle = COLORS.GOLD_DARK;
+        // Center Bolt
+        const boltGrad = ctx.createRadialGradient(-2, -2, 0, 0, 0, 6);
+        boltGrad.addColorStop(0, '#AAA');
+        boltGrad.addColorStop(1, '#444');
+        ctx.fillStyle = boltGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, 6, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Rotation Arrow Indicator
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(0, 0, 18, 0, Math.PI * 2);
+        ctx.arc(0, 0, 30, -Math.PI * 0.7, -Math.PI * 0.3);
         ctx.stroke();
         
-        // Hex bolt shape
-        ctx.beginPath();
-        for (let i = 0; i < 6; i++) {
-          const angle = (i * Math.PI) / 3;
-          const x = Math.cos(angle) * 10;
-          const y = Math.sin(angle) * 10;
-          if (i === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        }
-        ctx.closePath();
-        ctx.stroke();
+        // Arrowheads
+        const drawArrowhead = (angle: number) => {
+          ctx.save();
+          ctx.rotate(angle);
+          ctx.translate(30, 0);
+          ctx.beginPath();
+          ctx.moveTo(-4, -4);
+          ctx.lineTo(0, 0);
+          ctx.lineTo(-4, 4);
+          ctx.stroke();
+          ctx.restore();
+        };
+        drawArrowhead(-Math.PI * 0.7);
+        drawArrowhead(-Math.PI * 0.3);
         
-        ctx.restore(); // End Pivot
+        ctx.restore();
+        ctx.restore();
       });
 
       // --- Draw Bottom Platform (Large Metallic Base) ---
       const drawPlatform = () => {
         const platformX = width / 2;
         const platformY = tubeY + tubeHeight + 15;
-        const platformW = level === 1 ? 400 : 560;
+        const platformW = config.tubes === 2 ? 400 : 560;
         const platformH = 60;
 
         ctx.save();
@@ -883,14 +1034,11 @@ export default function App() {
       drawPlatform();
 
       // --- Draw Tubes and Accumulated Sand ---
-      const tubePositions = level === 1
-        ? [width / 2 - 81, width / 2 + 81]
-        : [width / 2 - 81, width / 2 + 40, width / 2 + 122];
-      
-      const tubeColors = level === 1 ? [COLORS.RED, COLORS.BLUE] : [COLORS.RED, COLORS.BLUE, COLORS.GREEN];
-      const tubeLabels = level === 1 ? ['RED', 'BLUE'] : ['RED', 'BLUE', 'GREEN'];
+      const tubeColors = config.colors.map(c => COLORS[c as keyof typeof COLORS]);
+      const tubeLabels = config.colors;
 
-      const drawTube = (x: number, data: { red: number, blue: number, green: number }, tubeColor: string, label: string) => {
+      const drawTube = (x: number, data: { red: number, blue: number, green: number, yellow: number }, tubeColor: string, label: string) => {
+        if (!data) return;
         const baseY = tubeY + tubeHeight - 10;
         const baseWidth = TUBE_WIDTH + 20;
         const baseHeight = 45;
@@ -986,7 +1134,7 @@ export default function App() {
         ctx.stroke();
 
         // 3. Sand Grains (3D Layers)
-        const total = data.red + data.blue + data.green;
+        const total = data.red + data.blue + data.green + data.yellow;
         if (total > 0) {
           const fillHeight = Math.min(tubeHeight - 20, total * 0.5); 
           let currentH = tubeY + tubeHeight - curveH;
@@ -1025,10 +1173,12 @@ export default function App() {
           const redRatio = data.red / total;
           const blueRatio = data.blue / total;
           const greenRatio = data.green / total;
+          const yellowRatio = data.yellow / total;
           
           drawLayer(fillHeight * redRatio, COLORS.RED, COLORS.RED_DARK, COLORS.RED_LIGHT);
           drawLayer(fillHeight * blueRatio, COLORS.BLUE, COLORS.BLUE_DARK, COLORS.BLUE_LIGHT);
           drawLayer(fillHeight * greenRatio, COLORS.GREEN, COLORS.GREEN_DARK, COLORS.GREEN_LIGHT);
+          drawLayer(fillHeight * yellowRatio, COLORS.YELLOW, COLORS.YELLOW_DARK, COLORS.YELLOW_LIGHT);
         }
 
         // 4. Percentage Label (Floating box)
@@ -1154,29 +1304,6 @@ export default function App() {
       };
       drawSpillageMeter();
 
-      // --- Draw Bottom Collector Funnel ---
-      const drawCollector = () => {
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([5, 5]);
-        
-        // Draw sloped lines leading to tubes
-        tubePositions.forEach(tx => {
-          ctx.beginPath();
-          ctx.moveTo(tx - TUBE_WIDTH, tubeY - 60);
-          ctx.lineTo(tx - TUBE_WIDTH/2, tubeY);
-          ctx.stroke();
-          
-          ctx.beginPath();
-          ctx.moveTo(tx + TUBE_WIDTH, tubeY - 60);
-          ctx.lineTo(tx + TUBE_WIDTH/2, tubeY);
-          ctx.stroke();
-        });
-        ctx.restore();
-      };
-      drawCollector();
-
       // --- Draw Particles ---
       particles.forEach(p => {
         ctx.save();
@@ -1190,11 +1317,13 @@ export default function App() {
       });
 
       // --- Draw Splashes ---
-      gameData.current.splashes.forEach(s => {
+      gameData.current.splashes.forEach((s, idx) => {
         ctx.globalAlpha = s.life;
         ctx.fillStyle = s.color;
+        // Use a deterministic "random" based on index and life to avoid pause flickering
         for (let i = 0; i < 4; i++) {
-          const angle = Math.random() * Math.PI * 2;
+          const seed = (idx + i) * 123.45;
+          const angle = (seed % (Math.PI * 2));
           const dist = (1 - s.life) * 20;
           ctx.beginPath();
           ctx.arc(s.x + Math.cos(angle) * dist, s.y + Math.sin(angle) * dist, 2, 0, Math.PI * 2);
@@ -1254,8 +1383,8 @@ export default function App() {
               <p className="text-stone-400 font-medium uppercase tracking-[0.3em] text-xs">Sorter Challenge</p>
             </motion.div>
 
-            <div className="grid grid-cols-2 gap-6">
-              {[1, 2].map((lvl) => (
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 max-w-4xl w-full">
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => (
                 <motion.button
                   key={lvl}
                   whileHover={{ scale: 1.05, y: -5 }}
@@ -1305,6 +1434,15 @@ export default function App() {
               <span className="text-[8px] uppercase tracking-[0.2em] text-white/40 font-bold leading-none mb-1">Level</span>
               <span className="text-sm font-bold text-emerald-500 leading-none">{level}</span>
             </div>
+
+            <button 
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); setGameState('home'); }}
+              className="w-8 h-8 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-colors text-white"
+              title="Home"
+            >
+              <Home size={14} />
+            </button>
 
             <div className="h-6 w-px bg-white/10" />
 
@@ -1397,7 +1535,7 @@ export default function App() {
               <div className="text-5xl font-black text-emerald-500 mb-10 tracking-tighter">{score}</div>
               
               <div className="flex flex-col gap-3">
-                {level < 2 ? (
+                {level < 10 ? (
                   <button 
                     onClick={() => initGame(level + 1)}
                     className="w-full py-5 bg-emerald-500 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-emerald-600 transition-all active:scale-95 shadow-xl shadow-emerald-500/20"
