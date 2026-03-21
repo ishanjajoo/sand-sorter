@@ -1,0 +1,5 @@
+{
+  "name": "Sand Sorter: Sorter Challenge",
+  "description": "A 2D physics game where you sort falling colored sand using a Sorter into the correct tubes.",
+  "requestFramePermissions": []
+}
