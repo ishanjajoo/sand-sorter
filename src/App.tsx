@@ -164,14 +164,14 @@ export default function App() {
     setSorterAngles(targetLevel === 1 ? [25] : [25, 25]);
   };
 
-  const handleInteraction = (e: React.MouseEvent | React.TouchEvent) => {
+  const handleInteraction = (e: React.PointerEvent) => {
     if (gameState !== 'playing' || isPaused) return;
 
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const x = ('touches' in e) ? e.touches[0].clientX - rect.left : (e as React.MouseEvent).clientX - rect.left;
-    const y = ('touches' in e) ? e.touches[0].clientY - rect.top : (e as React.MouseEvent).clientY - rect.top;
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
 
     const sorterY = gameData.current.height * SORTER_Y_RATIO;
     const sorterConfigs = level === 1 
@@ -1228,8 +1228,7 @@ export default function App() {
     <div 
       ref={containerRef}
       className="relative w-full h-screen bg-stone-950 overflow-hidden font-sans select-none touch-none"
-      onMouseDown={handleInteraction}
-      onTouchStart={handleInteraction}
+      onPointerDown={handleInteraction}
     >
       <canvas
         ref={canvasRef}
@@ -1292,27 +1291,25 @@ export default function App() {
       {/* UI Overlay */}
       {gameState === 'playing' && (
         <>
-          {/* Top Panel (Compact Single Line - Top Right) */}
-          <div className="absolute top-4 right-4 flex items-center gap-3 px-4 py-2 bg-stone-900/60 border border-white/10 rounded-2xl backdrop-blur-2xl shadow-2xl pointer-events-auto z-50">
-            <div className="flex items-center gap-4">
-              <div className="flex flex-col items-end">
-                <span className="text-[8px] uppercase tracking-[0.2em] text-white/40 font-bold leading-none mb-1">Score</span>
-                <span className="text-xl font-black text-white leading-none tabular-nums">{score}</span>
-              </div>
-              
-              <div className="h-6 w-px bg-white/10" />
-              
-              <div className="flex flex-col items-end">
-                <span className="text-[8px] uppercase tracking-[0.2em] text-white/40 font-bold leading-none mb-1">Level</span>
-                <span className="text-sm font-bold text-emerald-500 leading-none">{level}</span>
-              </div>
+          {/* Top Left Panel (Score) */}
+          <div className="absolute top-4 left-4 flex items-center gap-3 px-4 py-2 bg-stone-900/60 border border-white/10 rounded-2xl backdrop-blur-2xl shadow-2xl pointer-events-auto z-50">
+            <div className="flex flex-col items-start">
+              <span className="text-[8px] uppercase tracking-[0.2em] text-white/40 font-bold leading-none mb-1">Score</span>
+              <span className="text-xl font-black text-white leading-none tabular-nums">{score}</span>
+            </div>
+          </div>
+
+          {/* Top Right Panel (Level & Pause) */}
+          <div className="absolute top-4 right-4 flex items-center gap-4 px-4 py-2 bg-stone-900/60 border border-white/10 rounded-2xl backdrop-blur-2xl shadow-2xl pointer-events-auto z-50">
+            <div className="flex flex-col items-end">
+              <span className="text-[8px] uppercase tracking-[0.2em] text-white/40 font-bold leading-none mb-1">Level</span>
+              <span className="text-sm font-bold text-emerald-500 leading-none">{level}</span>
             </div>
 
             <div className="h-6 w-px bg-white/10" />
 
             <button 
-              onMouseDown={(e) => e.stopPropagation()}
-              onTouchStart={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); setIsPaused(!isPaused); }}
               className="w-8 h-8 flex items-center justify-center bg-white/10 hover:bg-white/20 rounded-xl transition-colors text-white"
             >
