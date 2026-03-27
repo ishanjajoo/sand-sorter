@@ -1,11 +1,114 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Settings2, RotateCw } from 'lucide-react';
-import backgroundImage from './assets/background.png';
+import { Settings2, RotateCw, AlertTriangle } from 'lucide-react';
+import backgroundImage from './assets/background_new.png';
 
 type Color = 'red' | 'blue' | 'yellow';
+type Segment = { color: Color; volume: number };
 
-const Jar = ({ color, label, fillLevel }: { color: Color, label: string, fillLevel: number }) => {
+const FUNNEL_CAPACITY = 30;
+const MAIN_PIPE_CAPACITY = 20;
+const BRANCH_PIPE_CAPACITY = 15;
+const FLOW_RATE = 0.8;
+
+const addToQueue = (queue: Segment[], color: Color, amount: number): Segment[] => {
+  if (amount <= 0) return queue;
+  const newQueue = [...queue];
+  if (newQueue.length > 0 && newQueue[newQueue.length - 1].color === color) {
+    newQueue[newQueue.length - 1] = { ...newQueue[newQueue.length - 1], volume: newQueue[newQueue.length - 1].volume + amount };
+  } else {
+    newQueue.push({ color, volume: amount });
+  }
+  return newQueue;
+};
+
+const removeFromQueue = (queue: Segment[], amount: number): { newQueue: Segment[]; removed: Segment[] } => {
+  const newQueue = [...queue];
+  let remainingToRemove = amount;
+  let removed: Segment[] = [];
+
+  while (remainingToRemove > 0 && newQueue.length > 0) {
+    const first = newQueue[0];
+    if (first.volume <= remainingToRemove) {
+      removed.push({ ...first });
+      remainingToRemove -= first.volume;
+      newQueue.shift();
+    } else {
+      removed.push({ color: first.color, volume: remainingToRemove });
+      newQueue[0] = { ...first, volume: first.volume - remainingToRemove };
+      remainingToRemove = 0;
+    }
+  }
+  return { newQueue, removed };
+};
+
+const getTotalVolume = (queue: Segment[]) => queue.reduce((sum, s) => sum + s.volume, 0);
+
+const QueueVisualizer: React.FC<{ 
+  queue: Segment[], 
+  capacity: number, 
+  className?: string, 
+  isVertical?: boolean,
+  isFlowing?: boolean
+}> = ({ 
+  queue, 
+  capacity, 
+  className, 
+  isVertical = true,
+  isFlowing = false
+}) => {
+  const sandColors = {
+    red: 'bg-red-500 shadow-[0_0_15px_rgba(239,68,68,0.6)]',
+    blue: 'bg-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.6)]',
+    yellow: 'bg-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.6)]'
+  };
+
+  return (
+    <div className={`relative overflow-hidden ${className}`}>
+      {/* Sand Segments Container */}
+      <div className={`absolute inset-0 flex ${isVertical ? 'flex-col-reverse' : 'flex-row'} z-10`}>
+        {queue.map((seg, i) => (
+          <div 
+            key={i} 
+            className={`${sandColors[seg.color]} opacity-100 relative border-white/10`} 
+            style={{ 
+              [isVertical ? 'height' : 'width']: `${(seg.volume / capacity) * 100}%`,
+              borderWidth: seg.volume > 0 ? '1px' : '0'
+            }} 
+          >
+            {/* Animated Sand Texture */}
+            <motion.div 
+              className="absolute inset-0 opacity-60"
+              style={{
+                backgroundImage: 'radial-gradient(circle, #fff 1.5px, transparent 1.5px)',
+                backgroundSize: '4px 4px',
+                backgroundRepeat: 'repeat'
+              }}
+              animate={isFlowing ? {
+                y: isVertical ? [0, 20] : 0,
+                x: !isVertical ? [0, 20] : 0
+              } : {}}
+              transition={{ repeat: Infinity, duration: 0.3, ease: 'linear' }}
+            />
+            {/* Inner Glow */}
+            <div className="absolute inset-0 bg-gradient-to-r from-white/30 via-transparent to-black/30 pointer-events-none" />
+          </div>
+        ))}
+      </div>
+      {/* Glass Shine Overlay */}
+      <div className="absolute inset-0 bg-gradient-to-r from-white/20 via-transparent to-white/20 pointer-events-none z-20" />
+      {isFlowing && (
+        <motion.div 
+          className="absolute inset-0 bg-white/20 pointer-events-none z-30"
+          animate={{ opacity: [0.1, 0.4, 0.1] }}
+          transition={{ repeat: Infinity, duration: 0.4 }}
+        />
+      )}
+    </div>
+  );
+};
+
+const Jar = ({ color, label, contents }: { color: Color, label: string, contents: Segment[] }) => {
   const labelColors = {
     red: 'bg-red-600 border-red-400 shadow-red-900/50',
     blue: 'bg-blue-600 border-blue-400 shadow-blue-900/50',
@@ -13,32 +116,46 @@ const Jar = ({ color, label, fillLevel }: { color: Color, label: string, fillLev
   };
 
   const sandColors = {
-    red: 'bg-gradient-to-t from-red-700 via-red-500 to-red-400 shadow-[0_0_20px_rgba(239,68,68,0.5)]',
-    blue: 'bg-gradient-to-t from-blue-700 via-blue-500 to-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.5)]',
-    yellow: 'bg-gradient-to-t from-yellow-600 via-yellow-400 to-yellow-300 shadow-[0_0_20px_rgba(234,179,8,0.5)]'
+    red: 'from-red-700 via-red-500 to-red-400',
+    blue: 'from-blue-700 via-blue-500 to-blue-400',
+    yellow: 'from-yellow-600 via-yellow-400 to-yellow-300'
   };
 
   return (
     <div className="relative flex flex-col items-center">
       {/* 3D Glass Jar */}
-      <div className="relative w-28 h-36 bg-white/10 backdrop-blur-lg border-[3px] border-white/30 rounded-b-[40px] rounded-t-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.5),inset_0_0_20px_rgba(255,255,255,0.2)] overflow-hidden">
+      <div className="relative w-28 h-36 bg-slate-900/40 backdrop-blur-lg border-[3px] border-white/40 rounded-b-[40px] rounded-t-[10px] shadow-[0_10px_30px_rgba(0,0,0,0.6),inset_0_0_20px_rgba(255,255,255,0.1)] overflow-hidden">
         {/* Glass Highlights */}
-        <div className="absolute top-0 left-4 w-2 h-full bg-gradient-to-r from-white/30 to-transparent opacity-40 z-20" />
-        <div className="absolute top-0 right-4 w-1 h-full bg-gradient-to-l from-white/20 to-transparent opacity-30 z-20" />
+        <div className="absolute top-0 left-4 w-2 h-full bg-gradient-to-r from-white/40 to-transparent opacity-50 z-20" />
+        <div className="absolute top-0 right-4 w-1 h-full bg-gradient-to-l from-white/30 to-transparent opacity-40 z-20" />
         
-        {/* Sand Content */}
-        <motion.div 
-          className={`absolute bottom-0 w-full ${sandColors[color]} z-10`}
-          initial={{ height: 0 }}
-          animate={{ height: `${fillLevel}%` }}
-          transition={{ type: 'spring', stiffness: 30, damping: 15 }}
-        >
-          {/* Sand Surface Curve */}
-          <div className="absolute -top-2 w-full h-4 bg-inherit rounded-[100%] opacity-90 border-t border-white/20" />
-        </motion.div>
+        {/* Sand Content - Stacked Layers */}
+        <div className="absolute bottom-0 left-0 right-0 h-full flex flex-col-reverse z-10">
+          {contents.map((seg, i) => (
+            <motion.div 
+              key={i} 
+              className={`bg-gradient-to-t ${sandColors[seg.color]} w-full relative border-t border-white/20`} 
+              initial={{ height: 0 }}
+              animate={{ height: `${seg.volume}%` }}
+              transition={{ type: 'spring', stiffness: 60, damping: 20 }}
+            >
+              {/* Surface Shine */}
+              <div className="absolute top-0 w-full h-2 bg-white/30 blur-[1px]" />
+              {/* Grain Texture */}
+              <div 
+                className="absolute inset-0 opacity-40"
+                style={{
+                  backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)',
+                  backgroundSize: '5px 5px',
+                  backgroundRepeat: 'repeat'
+                }}
+              />
+            </motion.div>
+          ))}
+        </div>
 
         {/* Rim Detail */}
-        <div className="absolute top-0 w-full h-4 bg-white/20 border-b-2 border-white/30 rounded-t-[10px] z-20" />
+        <div className="absolute top-0 w-full h-4 bg-white/30 border-b-2 border-white/40 rounded-t-[10px] z-20" />
       </div>
       
       {/* 3D Label */}
@@ -72,33 +189,79 @@ const Valve = ({ isOpen, onToggle }: { isOpen: boolean, onToggle: () => void }) 
 export default function App() {
   const [isTapOpen, setIsTapOpen] = useState(false);
   const [sorterDirection, setSorterDirection] = useState<Color>('red');
-  const [tankSand, setTankSand] = useState({ red: 100, blue: 100, yellow: 100 });
-  const [jarSand, setJarSand] = useState({ red: 0, blue: 0, yellow: 0 });
-  const [isFlowing, setIsFlowing] = useState(false);
+  const [flowState, setFlowState] = useState({
+    tank: { red: 100, blue: 100, yellow: 100 },
+    funnel: [] as Segment[],
+    mainPipe: [] as Segment[],
+    branches: { red: [], blue: [], yellow: [] } as Record<Color, Segment[]>,
+    jars: { red: [], blue: [], yellow: [] } as Record<Color, Segment[]>,
+    totalDrained: 0,
+    totalSpillage: 0
+  });
 
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isTapOpen) {
-      interval = setInterval(() => {
-        setTankSand(prev => {
-          const currentSand = prev[sorterDirection];
-          if (currentSand <= 0) {
-            setIsFlowing(false);
-            return prev;
+    const interval = setInterval(() => {
+      setFlowState(prev => {
+        let tank = { ...prev.tank };
+        let funnel = [...prev.funnel];
+        let mainPipe = [...prev.mainPipe];
+        let branches = { red: [...prev.branches.red], blue: [...prev.branches.blue], yellow: [...prev.branches.yellow] };
+        let jars = { red: [...prev.jars.red], blue: [...prev.jars.blue], yellow: [...prev.jars.yellow] };
+        let totalDrained = prev.totalDrained;
+        let totalSpillage = prev.totalSpillage;
+
+        // 1. Tank -> Funnel (Always tries to fill funnel if space)
+        const funnelVol = getTotalVolume(funnel);
+        if (funnelVol < FUNNEL_CAPACITY) {
+          let flowingColor: Color | null = null;
+          // Red is bottom layer (flows first), then Blue, then Yellow
+          if (tank.red > 0) flowingColor = 'red';
+          else if (tank.blue > 0) flowingColor = 'blue';
+          else if (tank.yellow > 0) flowingColor = 'yellow';
+
+          if (flowingColor) {
+            const amount = Math.min(FLOW_RATE, tank[flowingColor], FUNNEL_CAPACITY - funnelVol);
+            tank[flowingColor] -= amount;
+            funnel = addToQueue(funnel, flowingColor, amount);
           }
-          setIsFlowing(true);
-          return { ...prev, [sorterDirection]: Math.max(0, currentSand - 0.4) };
+        }
+
+        // 2. Funnel -> Main Pipe (Controlled by Valve)
+        if (isTapOpen && funnel.length > 0) {
+          const { newQueue, removed } = removeFromQueue(funnel, FLOW_RATE);
+          funnel = newQueue;
+          removed.forEach(seg => {
+            mainPipe = addToQueue(mainPipe, seg.color, seg.volume);
+          });
+        }
+
+        // 3. Main Pipe -> Branch Pipe (Always flowing if content)
+        if (mainPipe.length > 0) {
+          const { newQueue, removed } = removeFromQueue(mainPipe, FLOW_RATE);
+          mainPipe = newQueue;
+          removed.forEach(seg => {
+            branches[sorterDirection] = addToQueue(branches[sorterDirection], seg.color, seg.volume);
+          });
+        }
+
+        // 4. Branch Pipes -> Jars (Always draining)
+        (['red', 'blue', 'yellow'] as Color[]).forEach(branch => {
+          if (branches[branch].length > 0) {
+            const { newQueue, removed } = removeFromQueue(branches[branch], FLOW_RATE);
+            branches[branch] = newQueue;
+            removed.forEach(seg => {
+              jars[branch] = addToQueue(jars[branch], seg.color, seg.volume);
+              totalDrained += seg.volume;
+              if (seg.color !== branch) {
+                totalSpillage += seg.volume;
+              }
+            });
+          }
         });
 
-        setJarSand(prev => {
-          const currentJar = prev[sorterDirection];
-          if (currentJar >= 100) return prev;
-          return { ...prev, [sorterDirection]: Math.min(100, currentJar + 0.4) };
-        });
-      }, 50);
-    } else {
-      setIsFlowing(false);
-    }
+        return { tank, funnel, mainPipe, branches, jars, totalDrained, totalSpillage };
+      });
+    }, 50);
     return () => clearInterval(interval);
   }, [isTapOpen, sorterDirection]);
 
@@ -107,6 +270,8 @@ export default function App() {
     const currentIndex = directions.indexOf(sorterDirection);
     setSorterDirection(directions[(currentIndex + 1) % 3]);
   };
+
+  const spillagePercent = flowState.totalDrained > 0 ? (flowState.totalSpillage / flowState.totalDrained) * 100 : 0;
 
   return (
     <div 
@@ -118,29 +283,45 @@ export default function App() {
         backgroundRepeat: 'no-repeat'
       }}
     >
+      {/* Spillage Bar - Right Side */}
+      <div className="absolute right-6 top-1/2 -translate-y-1/2 flex flex-col items-center gap-4 z-50">
+        <div className="flex flex-col items-center">
+          <AlertTriangle className={`w-6 h-6 mb-2 ${spillagePercent > 30 ? 'text-red-500 animate-pulse' : 'text-yellow-500'}`} />
+          <span className="text-[10px] font-black text-white/60 tracking-widest uppercase">Spillage</span>
+        </div>
+        <div className="w-8 h-64 bg-slate-900/80 border-2 border-white/10 rounded-full p-1 relative overflow-hidden shadow-2xl">
+          <motion.div 
+            className="absolute bottom-1 left-1 right-1 bg-gradient-to-t from-red-600 to-orange-400 rounded-full"
+            animate={{ height: `${Math.min(100, spillagePercent)}%` }}
+            transition={{ type: 'spring', stiffness: 50 }}
+          />
+        </div>
+        <span className="text-xs font-bold text-white font-mono">{Math.round(spillagePercent)}%</span>
+      </div>
+
       {/* Top Section: Tank & Funnel */}
       <div className="flex flex-col items-center scale-90 md:scale-100">
         {/* 3D Tank */}
-        <div className="w-44 h-52 bg-white/10 backdrop-blur-xl border-[4px] border-white/30 rounded-2xl overflow-hidden relative shadow-[0_20px_50px_rgba(0,0,0,0.5),inset_0_0_30px_rgba(255,255,255,0.1)]">
+        <div className="w-44 h-52 bg-slate-900/40 backdrop-blur-xl border-[4px] border-white/40 rounded-2xl overflow-hidden relative shadow-[0_20px_50px_rgba(0,0,0,0.6),inset_0_0_30px_rgba(255,255,255,0.1)]">
           <div className="flex flex-col-reverse h-full w-full">
-            <motion.div className="bg-gradient-to-t from-yellow-600 to-yellow-400 w-full" animate={{ height: `${tankSand.yellow / 3}%` }} />
-            <motion.div className="bg-gradient-to-t from-blue-700 to-blue-500 w-full" animate={{ height: `${tankSand.blue / 3}%` }} />
-            <motion.div className="bg-gradient-to-t from-red-700 to-red-500 w-full" animate={{ height: `${tankSand.red / 3}%` }} />
+            <motion.div className="bg-gradient-to-t from-red-700 to-red-500 w-full" animate={{ height: `${flowState.tank.red / 3}%` }} />
+            <motion.div className="bg-gradient-to-t from-blue-700 to-blue-500 w-full" animate={{ height: `${flowState.tank.blue / 3}%` }} />
+            <motion.div className="bg-gradient-to-t from-yellow-600 to-yellow-400 w-full" animate={{ height: `${flowState.tank.yellow / 3}%` }} />
           </div>
-          {/* Glass Shine */}
           <div className="absolute top-0 left-4 w-3 h-full bg-white/20 rounded-full z-10" />
         </div>
 
         {/* 3D Conical Funnel */}
         <div 
-          className="w-36 h-20 bg-white/15 backdrop-blur-xl border-x-[4px] border-b-[4px] border-white/30 relative mt-[-4px] shadow-lg"
+          className="w-36 h-20 bg-white/15 backdrop-blur-xl border-x-[4px] border-b-[4px] border-white/30 relative mt-[-4px] shadow-lg overflow-hidden"
           style={{ clipPath: 'polygon(0% 0%, 100% 0%, 65% 100%, 35% 100%)' }}
         >
-          {isFlowing && (
-            <div className={`absolute inset-x-0 bottom-0 w-full h-full opacity-60 ${
-              sorterDirection === 'red' ? 'bg-red-500' : sorterDirection === 'blue' ? 'bg-blue-500' : 'bg-yellow-400'
-            }`} />
-          )}
+          <QueueVisualizer 
+            queue={flowState.funnel} 
+            capacity={FUNNEL_CAPACITY} 
+            className="w-full h-full" 
+            isFlowing={isTapOpen}
+          />
         </div>
 
         {/* Valve Mechanism */}
@@ -149,20 +330,15 @@ export default function App() {
 
       {/* Middle Section: Pipes & Sorter */}
       <div className="flex-1 flex flex-col items-center w-full max-w-3xl relative">
-        {/* Main Vertical Pipe (3D Cylinder) */}
-        <div className="w-6 h-full min-h-[50px] bg-gradient-to-r from-white/5 via-white/20 to-white/5 border-x-2 border-white/30 relative overflow-hidden shadow-inner">
-          {isFlowing && (
-            <motion.div 
-              className={`absolute inset-x-0 top-0 w-full h-full opacity-80 ${
-                sorterDirection === 'red' ? 'bg-red-500' : sorterDirection === 'blue' ? 'bg-blue-500' : 'bg-yellow-400'
-              }`}
-              animate={{ y: [0, 10] }}
-              transition={{ repeat: Infinity, duration: 0.1, ease: 'linear' }}
-            />
-          )}
-        </div>
+        {/* Main Vertical Pipe (Round Cylinder) */}
+        <QueueVisualizer 
+          queue={flowState.mainPipe} 
+          capacity={MAIN_PIPE_CAPACITY} 
+          className="w-10 h-full min-h-[60px] bg-slate-900/40 border-x-2 border-white/40 shadow-inner rounded-full"
+          isFlowing={flowState.mainPipe.length > 0}
+        />
 
-        {/* Sorter Junction (3D Gear) */}
+        {/* Sorter Junction */}
         <div className="relative z-40">
           <button 
             onClick={toggleSorter}
@@ -175,41 +351,37 @@ export default function App() {
           <div className={`absolute -top-8 left-1/2 -translate-x-1/2 px-3 py-1 bg-black/60 backdrop-blur-md rounded-full border border-white/20 text-[9px] font-black tracking-widest uppercase whitespace-nowrap ${
             sorterDirection === 'red' ? 'text-red-400' : sorterDirection === 'blue' ? 'text-blue-400' : 'text-yellow-400'
           }`}>
-            Sorter: {sorterDirection}
+            Target: {sorterDirection}
           </div>
         </div>
 
-        {/* Branching Pipes (3D Cylindrical) */}
+        {/* Branching Pipes (Round Cylindrical) */}
         <div className="w-full h-28 relative flex justify-center">
-          {/* Horizontal Connector */}
-          <div className="absolute top-0 left-[12%] right-[12%] h-6 bg-gradient-to-b from-white/5 via-white/20 to-white/5 border-y-2 border-white/30 shadow-inner" />
+          {/* Horizontal Connector - Rounded */}
+          <div className="absolute top-0 left-[12%] right-[12%] h-8 bg-gradient-to-b from-white/5 via-white/25 to-white/5 border-y-2 border-white/30 shadow-inner rounded-full" />
           
           {/* Branch Vertical Pipes */}
           {[
-            { pos: 'left-[12%]', color: 'red' },
-            { pos: 'left-1/2 -translate-x-1/2', color: 'blue' },
-            { pos: 'right-[12%]', color: 'yellow' }
+            { pos: 'left-[12%]', color: 'red' as Color },
+            { pos: 'left-1/2 -translate-x-1/2', color: 'blue' as Color },
+            { pos: 'right-[12%]', color: 'yellow' as Color }
           ].map((pipe, i) => (
-            <div key={i} className={`absolute top-0 ${pipe.pos} w-6 h-full bg-gradient-to-r from-white/5 via-white/20 to-white/5 border-x-2 border-white/30 overflow-hidden shadow-inner`}>
-              {isFlowing && sorterDirection === pipe.color && (
-                <motion.div 
-                  className={`absolute inset-x-0 top-0 w-full h-full opacity-80 ${
-                    pipe.color === 'red' ? 'bg-red-500' : pipe.color === 'blue' ? 'bg-blue-500' : 'bg-yellow-400'
-                  }`}
-                  animate={{ y: [0, 10] }}
-                  transition={{ repeat: Infinity, duration: 0.1, ease: 'linear' }}
-                />
-              )}
-            </div>
+            <QueueVisualizer 
+              key={i}
+              queue={flowState.branches[pipe.color]} 
+              capacity={BRANCH_PIPE_CAPACITY} 
+              className={`absolute top-0 ${pipe.pos} w-10 h-full bg-slate-900/40 border-x-2 border-white/40 shadow-inner rounded-b-full`}
+              isFlowing={flowState.branches[pipe.color].length > 0}
+            />
           ))}
         </div>
       </div>
 
       {/* Bottom Section: Jars */}
       <div className="flex gap-8 md:gap-20 items-end pb-6 scale-90 md:scale-100">
-        <Jar color="red" label="Essence A" fillLevel={jarSand.red} />
-        <Jar color="blue" label="Essence B" fillLevel={jarSand.blue} />
-        <Jar color="yellow" label="Essence C" fillLevel={jarSand.yellow} />
+        <Jar color="red" label="Essence A" contents={flowState.jars.red} />
+        <Jar color="blue" label="Essence B" contents={flowState.jars.blue} />
+        <Jar color="yellow" label="Essence C" contents={flowState.jars.yellow} />
       </div>
 
       {/* Floor Reflection */}
