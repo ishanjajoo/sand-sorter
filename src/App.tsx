@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Settings2, RotateCw, AlertTriangle } from 'lucide-react';
-import backgroundImage from './assets/background_new.png';
 
 type Color = 'red' | 'blue' | 'yellow';
 type Segment = { color: Color; volume: number };
@@ -277,7 +276,7 @@ export default function App() {
     <div 
       className="h-screen w-full bg-slate-950 overflow-hidden relative flex flex-col items-center justify-between py-4"
       style={{
-        backgroundImage: `url(${backgroundImage})`,
+        backgroundImage: 'url("/assets/background_new.png")',
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         backgroundRepeat: 'no-repeat'
